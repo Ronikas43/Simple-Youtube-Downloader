@@ -1,9 +1,8 @@
 Requirements:
-1. Simple Youtube Downloader
-2. yt-dlp
-3. ffmpeg
+1. Latest Version of [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases)
+2. Latest Full Version of [ffmpeg](https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z)
 
 Instructions:
-1. Download The Latest Version of The Source Code
-2. Download The Latest Version of [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases)
-3. Download The Latest Full Version of [ffmpeg](https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z)
+1. Download The Latest of the Source Code
+2. Put ffmpeg.exe And yt-dlp.exe to The Same Folder as The App
+3. Launch SimpleYoutubeDownloader.exe
