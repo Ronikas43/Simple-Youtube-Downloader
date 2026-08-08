@@ -5,4 +5,4 @@ Requirements:
 
 Instructions:
 1. Download The Latest Version of The Source Code
-2. Download The Latest Version of yt-dlp (https://github.com/yt-dlp/yt-dlp/releases)
+2. Download The Latest Version of [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases)
