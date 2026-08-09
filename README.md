@@ -7,4 +7,4 @@ Instructions:
 2. Put ffmpeg.exe And yt-dlp.exe to The Same Folder as The App
 3. Launch SimpleYoutubeDownloader.exe
 
-Made With ChatGPT
+Made With ChatGPT and Claude
