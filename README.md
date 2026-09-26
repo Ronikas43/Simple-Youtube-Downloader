@@ -1,8 +1,8 @@
 ⭐Features:
-✅Download Videos, Audio, And Thumnails
-✅Auto Updates
-✅Downloads And Updates The Required Files Automatically
-✅Select Your Preferred File Type And Quality
+1. Download Videos, Audio, And Thumnails
+2. Auto Updates
+3. Downloads And Updates The Required Files Automatically
+4. Select Your Preferred File Type And Quality
 
 🛠️Requirements:
 1. Windows 10 or 11
