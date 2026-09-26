@@ -1,10 +1,16 @@
-Requirements:
-1. Latest Version of [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases)
-2. Latest Full Version of [ffmpeg](https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z)
+⭐Features:
+✅Download Videos, Audio, And Thumnails
+✅Auto Updates
+✅Downloads And Updates The Required Files Automatically
+✅Select Your Preferred File Type And Quality
 
-Instructions:
+🛠️Requirements:
+1. Windows 10 or 11
+2. A Brain
+
+📕Instructions:
 1. Download The Latest Version of SimpleYoutubeDownloader.exe
-2. Put ffmpeg.exe And yt-dlp.exe to The Same Folder as The App
-3. Launch SimpleYoutubeDownloader.exe
+2. Launch SimpleYoutubeDownloader.exe
 
-Made With ChatGPT and Claude
+
+• Made With ChatGPT and Claude
