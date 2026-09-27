@@ -12,19 +12,39 @@ import urllib.request
 import urllib.error
 
 # ============================================================
-# YouTube Downloader 1.1.0
+# Simple Youtube Downloader 1.2.0
 # ============================================================
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
-# Program directory (works both as script and frozen .exe)
+# Program directory (works both as script and frozen .exe) - this is where the
+# app's own EXE lives, and is only used for self-updating the app itself.
 BASE_DIR = os.path.dirname(os.path.abspath(
     sys.executable if getattr(sys, "frozen", False) else __file__
 ))
 
-YTDLP = os.path.join(BASE_DIR, "yt-dlp.exe")
-FFMPEG = os.path.join(BASE_DIR, "ffmpeg.exe")
-FFPROBE = os.path.join(BASE_DIR, "ffprobe.exe")
+
+def get_data_dir():
+    """
+    Folder for yt-dlp/ffmpeg and update-state data, kept out of the app's own
+    folder (e.g. Program Files) so nothing extra gets dropped next to the EXE
+    and so the app doesn't need admin rights to write there.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+
+    data_dir = os.path.join(base, "Simple Youtube Downloader")
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
+DATA_DIR = get_data_dir()
+
+YTDLP = os.path.join(DATA_DIR, "yt-dlp.exe")
+FFMPEG = os.path.join(DATA_DIR, "ffmpeg.exe")
+FFPROBE = os.path.join(DATA_DIR, "ffprobe.exe")
 
 CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
@@ -44,7 +64,7 @@ FFMPEG_ASSET_NAME = "ffmpeg-master-latest-win64-gpl.zip"
 
 APP_RELEASES_API = "https://api.github.com/repos/Ronikas43/Simple-Youtube-Downloader/releases/latest"
 
-UPDATE_STATE_FILE = os.path.join(BASE_DIR, "update_state.json")
+UPDATE_STATE_FILE = os.path.join(DATA_DIR, "update_state.json")
 
 # ============================================================
 # GLOBAL STATE
@@ -93,8 +113,8 @@ def check_files():
         messagebox.showerror(
             "Missing files",
             "The following files are missing:\n\n" + "\n".join(missing) +
-            "\n\nRestart the app to be prompted to download them, or place them "
-            "in the same folder as the YouTube Downloader EXE."
+            "\n\nRestart the app to be prompted to download them, or place them in:\n"
+            f"{DATA_DIR}"
         )
         return False
     return True
@@ -169,7 +189,7 @@ def install_ffmpeg_asset(asset):
     set_status("Downloading ffmpeg...")
     set_progress(0)
 
-    zip_path = os.path.join(BASE_DIR, "_ffmpeg_update.zip")
+    zip_path = os.path.join(DATA_DIR, "_ffmpeg_update.zip")
     download_file(asset["browser_download_url"], zip_path, on_progress=set_progress)
 
     extracted = []
@@ -177,7 +197,7 @@ def install_ffmpeg_asset(asset):
         for member in archive.namelist():
             filename = os.path.basename(member)
             if filename in ("ffmpeg.exe", "ffprobe.exe"):
-                target_path = os.path.join(BASE_DIR, filename)
+                target_path = os.path.join(DATA_DIR, filename)
                 with archive.open(member) as source, open(target_path, "wb") as target:
                     shutil.copyfileobj(source, target)
                 extracted.append(filename)
@@ -395,7 +415,7 @@ def startup_checks():
         wants_download = ask_yes_no_blocking(
             "Required files missing",
             "The following required files were not found:\n\n" + "\n".join(missing) +
-            "\n\nDownload them now?"
+            f"\n\nThey'll be saved to:\n{DATA_DIR}\n\nDownload them now?"
         )
 
         if wants_download:
@@ -442,6 +462,12 @@ def url_changed(event=None):
     url = url_entry.get().strip()
     if url and ("youtube.com/" in url or "youtu.be/" in url):
         check_video()
+
+
+def url_pasted(event=None):
+    # <<Paste>> fires slightly before the entry's text is actually updated
+    # on some platforms, so give it a moment before reading the field.
+    root.after(10, url_changed)
 
 
 def check_video():
@@ -513,7 +539,7 @@ def check_finished():
 
 
 # ============================================================
-# QUALITY DETECTION
+# QUALITY DETECTION (video resolution + fps + audio sample rate)
 # ============================================================
 
 QUALITY_NAMES = {
@@ -522,20 +548,57 @@ QUALITY_NAMES = {
     240: "240p", 144: "144p"
 }
 
+# Populated once a video has been checked; used to cap the quality/fps
+# pickers to what the video actually offers, for both tabs at once so
+# switching between Video/Audio doesn't need a re-check.
+detected_heights = []
+detected_max_fps = None
+detected_audio_khz = []
+detected_max_khz = None
+
 
 def update_quality_list():
+    global detected_heights, detected_max_fps, detected_audio_khz, detected_max_khz
+
     if not video_info:
         return
 
+    formats = video_info.get("formats", [])
+
     heights = {
-        int(fmt["height"]) for fmt in video_info.get("formats", [])
+        int(fmt["height"]) for fmt in formats
         if fmt.get("height") and fmt.get("vcodec") and fmt.get("vcodec") != "none"
     }
+    detected_heights = sorted(heights, reverse=True)
 
+    fps_values = {
+        round(fmt["fps"]) for fmt in formats
+        if fmt.get("fps") and fmt.get("vcodec") and fmt.get("vcodec") != "none"
+    }
+    detected_max_fps = max(fps_values) if fps_values else None
+
+    khz_values = {
+        round(fmt["asr"] / 1000, 1) for fmt in formats
+        if fmt.get("asr") and fmt.get("acodec") and fmt.get("acodec") != "none"
+    }
+    detected_audio_khz = sorted(khz_values, reverse=True)
+    detected_max_khz = max(khz_values) if khz_values else None
+
+    # Populate whichever tab is active now; the other tab's picker is
+    # rebuilt from the same cached detection the moment the user switches
+    # to it, so nothing needs to be re-checked on click.
+    if download_type_var.get() == "Video":
+        apply_video_quality_options()
+    elif download_type_var.get() == "Audio":
+        apply_audio_quality_options()
+
+    apply_fps_options()
+
+
+def apply_video_quality_options():
     available = ["Best available"] + [
-        QUALITY_NAMES.get(h, f"{h}p") for h in sorted(heights, reverse=True)
+        QUALITY_NAMES.get(h, f"{h}p") for h in detected_heights
     ]
-
     quality_combo["values"] = available
     quality_combo.current(0)
 
@@ -543,6 +606,192 @@ def update_quality_list():
 def get_height():
     match = re.search(r"(\d+)p", quality_combo.get())
     return int(match.group(1)) if match else None
+
+
+# ============================================================
+# FPS SELECTION (video only)
+# ============================================================
+
+FPS_PRESET_VALUES = [60, 50, 48, 30, 25, 24, 20, 10]
+ABSOLUTE_MAX_FPS = 60
+
+
+def get_fps_cap():
+    """The highest fps the user is allowed to pick: the checked video's own
+    max fps if known (you can't ask for more fps than the source has),
+    otherwise the app's absolute ceiling."""
+    if detected_max_fps:
+        return min(detected_max_fps, ABSOLUTE_MAX_FPS)
+    return ABSOLUTE_MAX_FPS
+
+
+def apply_fps_options():
+    """Rebuilds the fps preset list so nothing above the checked video's own
+    fps (or the absolute 60fps ceiling) is selectable."""
+    cap = get_fps_cap()
+    allowed = [v for v in FPS_PRESET_VALUES if v <= cap]
+    values = ["Original"] + [str(v) for v in allowed] + ["Custom"]
+
+    current = fps_combo.get()
+    fps_combo["values"] = values
+    fps_combo.set(current if current in values else "Original")
+
+    fps_selection_changed()
+    clamp_fps_entry()
+
+
+def fps_selection_changed(event=None):
+    if fps_combo.get() == "Custom":
+        fps_custom_entry.pack(fill="x", pady=(5, 5))
+    else:
+        fps_custom_entry.pack_forget()
+
+
+def clamp_fps_entry(event=None):
+    """Keeps the custom fps entry numeric and capped at the checked video's fps."""
+    raw = fps_custom_entry.get().strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+
+    if digits != raw:
+        fps_custom_entry.delete(0, tk.END)
+        fps_custom_entry.insert(0, digits)
+        raw = digits
+
+    if not raw:
+        return
+
+    cap = get_fps_cap()
+    value = int(raw)
+    if value > cap:
+        fps_custom_entry.delete(0, tk.END)
+        fps_custom_entry.insert(0, str(cap))
+    elif value < 1:
+        fps_custom_entry.delete(0, tk.END)
+        fps_custom_entry.insert(0, "1")
+
+
+def get_fps():
+    """Returns the fps cap to use, or None for no limit."""
+    if download_type_var.get() != "Video":
+        return None
+
+    selection = fps_combo.get()
+    cap = get_fps_cap()
+
+    if selection == "Original":
+        return None
+
+    if selection == "Custom":
+        value = fps_custom_entry.get().strip()
+        if value.isdigit() and int(value) > 0:
+            return min(int(value), cap)
+        return None
+
+    if selection.isdigit():
+        return min(int(selection), cap)
+
+    return None
+
+
+# ============================================================
+# AUDIO SAMPLE RATE SELECTION (audio only)
+# ============================================================
+
+AUDIO_PRESET_VALUES = [48, 44.1, 32, 24, 16, 12, 8]
+MAX_KHZ = 48.0
+
+
+def get_khz_cap():
+    """The highest sample rate the user is allowed to pick: the checked
+    video's own max sample rate if known, otherwise the app's ceiling."""
+    if detected_max_khz:
+        return min(detected_max_khz, MAX_KHZ)
+    return MAX_KHZ
+
+
+def _khz_label(value):
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def apply_audio_quality_options():
+    """Rebuilds the kHz preset list so nothing above the checked video's own
+    sample rate (or the app's 48kHz ceiling) is selectable."""
+    cap = get_khz_cap()
+    allowed = [v for v in AUDIO_PRESET_VALUES if v <= cap]
+    values = ["Best available"] + [_khz_label(v) for v in allowed] + ["Custom"]
+
+    current = quality_combo.get()
+    quality_combo["values"] = values
+    quality_combo.set(current if current in values else "Best available")
+
+    quality_selection_changed()
+    clamp_khz_entry()
+
+
+def quality_selection_changed(event=None):
+    """Shows the custom kHz entry only in Audio mode with 'Custom' picked."""
+    if download_type_var.get() == "Audio" and quality_combo.get() == "Custom":
+        khz_custom_entry.pack(fill="x", pady=(5, 5))
+    else:
+        khz_custom_entry.pack_forget()
+
+
+def clamp_khz_entry(event=None):
+    """Keeps the custom kHz entry numeric (one decimal point allowed) and capped."""
+    raw = khz_custom_entry.get().strip()
+
+    cleaned = []
+    seen_dot = False
+    for ch in raw:
+        if ch.isdigit():
+            cleaned.append(ch)
+        elif ch == "." and not seen_dot:
+            cleaned.append(ch)
+            seen_dot = True
+    cleaned = "".join(cleaned)
+
+    if cleaned != raw:
+        khz_custom_entry.delete(0, tk.END)
+        khz_custom_entry.insert(0, cleaned)
+        raw = cleaned
+
+    if not raw or raw == ".":
+        return
+
+    try:
+        value = float(raw)
+    except ValueError:
+        return
+
+    cap = get_khz_cap()
+    if value > cap:
+        khz_custom_entry.delete(0, tk.END)
+        khz_custom_entry.insert(0, _khz_label(cap))
+
+
+def get_khz():
+    """Returns the audio sample-rate cap in kHz to use, or None for no limit."""
+    if download_type_var.get() != "Audio":
+        return None
+
+    selection = quality_combo.get()
+    cap = get_khz_cap()
+
+    if selection == "Best available":
+        return None
+
+    if selection == "Custom":
+        value = khz_custom_entry.get().strip()
+        try:
+            parsed = float(value)
+        except ValueError:
+            return None
+        return min(parsed, cap) if parsed > 0 else None
+
+    try:
+        return min(float(selection), cap)
+    except ValueError:
+        return None
 
 
 # ============================================================
@@ -556,20 +805,25 @@ def download_type_changed():
         format_label.config(text="Video format:")
         format_combo["values"] = ["Original", "MP4", "MKV", "WebM"]
         format_combo.current(0)
+        quality_label.config(text="Quality:")
         quality_label.pack(anchor="w")
-        quality_combo.pack(fill="x", pady=(5, 15))
-        thumbnail_check.pack(anchor="w", padx=30, pady=(0, 5))
-        no_audio_check.pack(anchor="w", padx=30, pady=(0, 5))
+        quality_combo.pack(fill="x", pady=(5, 10))
+        khz_custom_entry.pack_forget()
+        apply_video_quality_options()
+        fps_frame.pack(fill="x", pady=(0, 10))
+        apply_fps_options()
+        no_audio_check.pack(anchor="w", pady=(0, 5))
 
     elif download_type == "Audio":
         format_label.config(text="Audio format:")
         format_combo["values"] = ["Original", "MP3", "OGG", "WAV"]
         format_combo.current(0)
+        quality_label.config(text="Quality (kHz):")
         quality_label.pack(anchor="w")
-        quality_combo.pack(fill="x", pady=(5, 15))
-        quality_combo["values"] = ["Best available"]
-        quality_combo.current(0)
-        thumbnail_check.pack(anchor="w", padx=30, pady=(0, 5))
+        quality_combo.pack(fill="x", pady=(5, 10))
+        apply_audio_quality_options()
+        fps_frame.pack_forget()
+        fps_custom_entry.pack_forget()
         no_audio_check.pack_forget()
 
     else:  # Thumbnail
@@ -578,7 +832,9 @@ def download_type_changed():
         format_combo.current(0)
         quality_label.pack_forget()
         quality_combo.pack_forget()
-        thumbnail_check.pack_forget()
+        khz_custom_entry.pack_forget()
+        fps_frame.pack_forget()
+        fps_custom_entry.pack_forget()
         no_audio_check.pack_forget()
 
 
@@ -618,7 +874,7 @@ def build_command():
         "--newline", "--progress", "--no-warnings",
         "-N", "8",
         "--retries", "10", "--fragment-retries", "10",
-        "--ffmpeg-location", BASE_DIR,
+        "--ffmpeg-location", DATA_DIR,
         "-o", output
     ]
 
@@ -630,19 +886,32 @@ def build_command():
 
     # -------------------- AUDIO --------------------
     if download_type == "Audio":
+        khz = get_khz()
+        # Filter to existing streams at or under the chosen sample rate
+        # instead of forcing a resample - same approach as the video
+        # height/fps filters, so "Original" audio really does stay original.
+        asr_filter = f"[asr<={int(round(khz * 1000))}]" if khz else ""
+        audio_selector = f"ba{asr_filter}/ba/b"
+
         if selected_format == "Original":
-            command += ["-f", "ba/b"]
+            command += ["-f", audio_selector]
         elif selected_format == "MP3":
-            command += ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
+            command += ["-f", audio_selector, "-x", "--audio-format", "mp3", "--audio-quality", "0"]
         elif selected_format == "OGG":
-            command += ["-x", "--audio-format", "vorbis", "--audio-quality", "0"]
+            command += ["-f", audio_selector, "-x", "--audio-format", "vorbis", "--audio-quality", "0"]
         elif selected_format == "WAV":
-            command += ["-x", "--audio-format", "wav"]
+            command += ["-f", audio_selector, "-x", "--audio-format", "wav"]
         return command + [url]
 
     # -------------------- VIDEO --------------------
     height = get_height()
     height_filter = f"[height<={height}]" if height else ""
+
+    fps = get_fps()
+    fps_filter = f"[fps<={fps}]" if fps else ""
+
+    filters = height_filter + fps_filter
+
     no_audio = no_audio_var.get()
 
     if no_audio:
@@ -650,28 +919,36 @@ def build_command():
         # codec, then fall back to any video-only stream (never fall back to
         # a combined format, since that would include audio).
         ext_pref = {"MP4": "[ext=mp4]", "WebM": "[ext=webm]"}.get(selected_format, "")
-        command += ["-f", f"bv*{height_filter}{ext_pref}/bv*{height_filter}/bv*"]
+        command += ["-f", f"bv*{filters}{ext_pref}/bv*{filters}/bv*"]
 
         if selected_format in ("MP4", "MKV", "WebM"):
             command += ["--remux-video", selected_format.lower()]
 
     elif selected_format == "Original":
-        command += ["-f", f"bv*{height_filter}+ba/b{height_filter}"]
+        # Prefer a video+audio pair from the same container family (mp4+m4a,
+        # then webm+webm) before falling back to any combo. Without this,
+        # yt-dlp could pick a video track whose native container doesn't
+        # match its paired audio, so the merged output's extension could
+        # differ unpredictably from what "Download without audio" would give
+        # for the very same video track.
+        command += [
+            "-f",
+            f"bv*{filters}[ext=mp4]+ba[ext=m4a]/"
+            f"bv*{filters}[ext=webm]+ba[ext=webm]/"
+            f"bv*{filters}+ba/b{filters}"
+        ]
 
     elif selected_format == "MP4":
         command += [
-            "-f", f"bv*{height_filter}[ext=mp4]+ba[ext=m4a]/bv*{height_filter}+ba/b{height_filter}",
+            "-f", f"bv*{filters}[ext=mp4]+ba[ext=m4a]/bv*{filters}+ba/b{filters}",
             "--merge-output-format", "mp4"
         ]
 
     elif selected_format in ("MKV", "WebM"):
         command += [
-            "-f", f"bv*{height_filter}+ba/b{height_filter}",
+            "-f", f"bv*{filters}+ba/b{filters}",
             "--merge-output-format", "mkv" if selected_format == "MKV" else "webm"
         ]
-
-    if thumbnail_var.get():
-        command += ["--write-thumbnail"]
 
     return command + [url]
 
@@ -790,11 +1067,11 @@ def download_exception(error):
 # ============================================================
 
 root = tk.Tk()
-root.title(f"YouTube Downloader {VERSION}")
-root.geometry("650x600")
+root.title(f"Simple Youtube Downloader {VERSION}")
+root.geometry("650x680")
 root.resizable(False, False)
 
-ttk.Label(root, text=f"YouTube Downloader {VERSION}",
+ttk.Label(root, text=f"Simple Youtube Downloader {VERSION}",
           font=("Segoe UI", 18, "bold")).pack(pady=(20, 15))
 
 # ---- URL ----
@@ -806,6 +1083,8 @@ url_entry = ttk.Entry(url_frame)
 url_entry.pack(fill="x", pady=(5, 15))
 url_entry.bind("<FocusOut>", url_changed)
 url_entry.bind("<Return>", url_changed)
+url_entry.bind("<<Paste>>", url_pasted)
+url_entry.bind("<Button-2>", url_pasted)  # middle-click paste (Linux)
 
 # ---- DOWNLOAD TYPE ----
 type_frame = ttk.LabelFrame(root, text="What do you want to download?")
@@ -817,9 +1096,15 @@ for label, value in (("Video", "Video"), ("Audio", "Audio"), ("Thumbnail", "Thum
     ttk.Radiobutton(type_frame, text=label, variable=download_type_var, value=value,
                      command=download_type_changed).pack(side="left", padx=20, pady=10)
 
-# ---- OPTIONS ----
-options_frame = ttk.Frame(root)
-options_frame.pack(fill="x", padx=30)
+# ---- OPTIONS (format + quality, and everything that belongs with them) ----
+# Everything below - format, quality, fps and "no audio" - lives inside one
+# fixed-position options block so toggling between tabs never reshuffles
+# where things sit on the screen.
+options_block = ttk.Frame(root)
+options_block.pack(fill="x", padx=30, pady=(0, 15))
+
+options_frame = ttk.Frame(options_block)
+options_frame.pack(fill="x")
 
 format_frame = ttk.Frame(options_frame)
 format_frame.pack(side="left", fill="x", expand=True, padx=(0, 10))
@@ -828,7 +1113,7 @@ format_label = ttk.Label(format_frame, text="Video format:")
 format_label.pack(anchor="w")
 
 format_combo = ttk.Combobox(format_frame, values=["Original", "MP4", "MKV", "WebM"], state="readonly")
-format_combo.pack(fill="x", pady=(5, 15))
+format_combo.pack(fill="x", pady=(5, 10))
 format_combo.current(0)
 format_combo.bind("<<ComboboxSelected>>", format_changed)
 
@@ -839,15 +1124,37 @@ quality_label = ttk.Label(quality_frame, text="Quality:")
 quality_label.pack(anchor="w")
 
 quality_combo = ttk.Combobox(quality_frame, values=["Best available"], state="readonly")
-quality_combo.pack(fill="x", pady=(5, 15))
+quality_combo.pack(fill="x", pady=(5, 10))
 quality_combo.current(0)
+quality_combo.bind("<<ComboboxSelected>>", quality_selection_changed)
+
+# Custom sample-rate entry, only shown in Audio mode with "Custom" picked.
+khz_custom_entry = ttk.Entry(quality_frame)
+khz_custom_entry.insert(0, "44.1")
+khz_custom_entry.bind("<KeyRelease>", clamp_khz_entry)
+khz_custom_entry.bind("<FocusOut>", clamp_khz_entry)
+# Not packed here - quality_selection_changed() shows it when needed.
+
+# ---- FPS (video only) - kept right under format/quality, not off at the
+# bottom of the window, so it reads as one options block with them.
+fps_frame = ttk.Frame(options_block)
+
+ttk.Label(fps_frame, text="FPS:").pack(anchor="w")
+
+fps_combo = ttk.Combobox(fps_frame, values=["Original"] + [str(v) for v in FPS_PRESET_VALUES] + ["Custom"], state="readonly")
+fps_combo.pack(fill="x", pady=(5, 0))
+fps_combo.current(0)
+fps_combo.bind("<<ComboboxSelected>>", fps_selection_changed)
+
+fps_custom_entry = ttk.Entry(fps_frame)
+fps_custom_entry.insert(0, "30")
+fps_custom_entry.bind("<KeyRelease>", clamp_fps_entry)
+fps_custom_entry.bind("<FocusOut>", clamp_fps_entry)
+# Not packed here - fps_selection_changed() shows it only when "Custom" is picked.
 
 # ---- CHECKBOXES ----
-thumbnail_var = tk.BooleanVar(value=False)
-thumbnail_check = ttk.Checkbutton(root, text="Also download thumbnail", variable=thumbnail_var)
-
 no_audio_var = tk.BooleanVar(value=False)
-no_audio_check = ttk.Checkbutton(root, text="Download without audio", variable=no_audio_var)
+no_audio_check = ttk.Checkbutton(options_block, text="Download without audio", variable=no_audio_var)
 
 # ---- SAVE FOLDER ----
 folder_frame = ttk.Frame(root)
